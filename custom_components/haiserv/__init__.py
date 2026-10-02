@@ -2,6 +2,7 @@
 
 from __future__ import annotations
 
+import logging
 from typing import TYPE_CHECKING
 
 if TYPE_CHECKING:
@@ -9,6 +10,8 @@ if TYPE_CHECKING:
     from homeassistant.core import HomeAssistant
 
 PLATFORMS = ["sensor"]
+
+_LOGGER = logging.getLogger(__name__)
 
 
 async def async_setup_entry(hass: HomeAssistant, entry: ConfigEntry) -> bool:
@@ -47,12 +50,23 @@ async def async_setup_entry(hass: HomeAssistant, entry: ConfigEntry) -> bool:
 
     # Instantiate the iServ API client with a local timetable cache so a
     # temporarily disabled module (e.g. HTTP 403) can serve the last result.
+    # debug_callback logs every request's status/redirects/cookies at DEBUG
+    # level, so enabling debug logging for this integration shows exactly
+    # which endpoint generation iServ accepted or rejected.
     cache = ResponseCache(hass.config.path("haiserv_cache"))
-    client = IServClient(session, url, username, password, cache=cache)
+    client = IServClient(
+        session, url, username, password, debug_callback=_LOGGER.debug, cache=cache
+    )
 
-    # Create and refresh the current-week coordinator
+    # Create and refresh the current-week coordinator. If the school has no
+    # reachable timetable endpoint, proceed with setup anyway (as the other
+    # coordinators below already do) so the timetable sensor is created and
+    # reports unavailable instead of blocking the whole config entry.
     coordinator = IServCoordinator(hass, client)
-    await coordinator.async_config_entry_first_refresh()
+    try:
+        await coordinator.async_config_entry_first_refresh()
+    except (UpdateFailed, ConfigEntryNotReady):
+        coordinator.data = []
 
     # Fetch the following week for a separate overview entity. Keep the
     # current-week entity usable if this optional request is unavailable.

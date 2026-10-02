@@ -15,6 +15,18 @@
   stable trigger anchor for automations. Intended to replace IServ's own push
   notifications, which are unreliable once an account is logged in on
   multiple devices.
+- Debug logging: the API client now reports every request's status,
+  redirects, and cookie names at DEBUG level. Enable
+  `logger: custom_components.haiserv: debug` in Home Assistant to see which
+  timetable endpoint generation your iServ instance accepts or rejects.
+
+### Fixed
+
+- A school with no reachable timetable endpoint (for example because the
+  module is disabled for students/parents) no longer blocks the whole config
+  entry from setting up. The timetable sensor is now created like the other
+  sensors and reports `unavailable` once its endpoint's consecutive-failure
+  threshold is reached, instead of the integration failing setup entirely.
 
 ## [0.1.0] — 2026-09-18
 
