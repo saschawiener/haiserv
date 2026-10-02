@@ -136,6 +136,11 @@ class IServClient:
         """Whether the client holds a valid session."""
         return self._authenticated
 
+    @property
+    def base_url(self) -> str:
+        """The normalized base URL of the iServ server."""
+        return self._base_url
+
     async def authenticate(self) -> bool:
         """Login to iServ via form POST, storing session cookies.
 
@@ -583,6 +588,31 @@ class IServClient:
         except AuthenticationError:
             await self.authenticate()
             return await self._do_post_form(url, payload)
+
+    # ------------------------------------------------------------------
+    # Notification methods
+    # ------------------------------------------------------------------
+
+    NOTIFICATIONS_PATH = "/iserv/user/api/notifications"
+
+    async def fetch_notifications(self) -> str:
+        """Fetch the current notifications JSON payload.
+
+        Re-authenticates once on session expiry (HTTP 401/403) before raising.
+
+        Returns:
+            Raw JSON response body of ``/iserv/user/api/notifications``.
+
+        Raises:
+            AuthenticationError: If authentication fails.
+            CannotConnect: If the connection times out or fails.
+        """
+        url = f"{self._base_url}{self.NOTIFICATIONS_PATH}"
+        try:
+            return await self._do_fetch_page(url)
+        except AuthenticationError:
+            await self.authenticate()
+            return await self._do_fetch_page(url)
 
     async def _do_fetch_page(self, url: str) -> str:
         """GET a page and return its text, raising on auth/connect failures.

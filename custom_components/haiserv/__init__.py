@@ -31,7 +31,11 @@ async def async_setup_entry(hass: HomeAssistant, entry: ConfigEntry) -> bool:
     from .api import IServClient
     from .cache import ResponseCache
     from .const import DOMAIN
-    from .coordinator import IServCoordinator, IServParentLetterCoordinator
+    from .coordinator import (
+        IServCoordinator,
+        IServNotificationCoordinator,
+        IServParentLetterCoordinator,
+    )
 
     # Get credentials from config entry data
     url = entry.data["url"]
@@ -71,6 +75,15 @@ async def async_setup_entry(hass: HomeAssistant, entry: ConfigEntry) -> bool:
         parentletter_coordinator.data = []
     hass.data[DOMAIN][f"{entry.entry_id}_parentletter"] = parentletter_coordinator
 
+    # Set up the notification coordinator. On failure, the sensor will be
+    # unavailable but setup proceeds so timetable entities remain functional.
+    notification_coordinator = IServNotificationCoordinator(hass, client)
+    try:
+        await notification_coordinator.async_config_entry_first_refresh()
+    except (UpdateFailed, ConfigEntryNotReady):
+        notification_coordinator.data = []
+    hass.data[DOMAIN][f"{entry.entry_id}_notifications"] = notification_coordinator
+
     # Forward platform setup to the sensor module
     await hass.config_entries.async_forward_entry_setups(entry, PLATFORMS)
 
@@ -97,5 +110,6 @@ async def async_unload_entry(hass: HomeAssistant, entry: ConfigEntry) -> bool:
         hass.data[DOMAIN].pop(entry.entry_id)
         hass.data[DOMAIN].pop(f"{entry.entry_id}_next_week", None)
         hass.data[DOMAIN].pop(f"{entry.entry_id}_parentletter", None)
+        hass.data[DOMAIN].pop(f"{entry.entry_id}_notifications", None)
 
     return unload_ok

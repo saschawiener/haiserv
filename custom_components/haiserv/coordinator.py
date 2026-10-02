@@ -10,9 +10,10 @@ from homeassistant.core import HomeAssistant
 from homeassistant.helpers.update_coordinator import DataUpdateCoordinator, UpdateFailed
 
 from .api import AuthenticationError, CannotConnect, IServClient
-from .const import DEFAULT_UPDATE_INTERVAL, DOMAIN
+from .const import DEFAULT_NOTIFICATION_UPDATE_INTERVAL, DEFAULT_UPDATE_INTERVAL, DOMAIN
 from .parser import Lesson, parse_timetable, sort_lessons
 from .parentletter_parser import ParentLetter, parse_parentletter_list
+from .notification import Notification, parse_notifications
 
 _LOGGER = logging.getLogger(__name__)
 
@@ -182,3 +183,72 @@ class IServParentLetterCoordinator(DataUpdateCoordinator[list[ParentLetter]]):
         )
         self.consecutive_failures = 0
         return letters
+
+
+class IServNotificationCoordinator(DataUpdateCoordinator[list[Notification]]):
+    """Coordinator that polls the iServ notifications endpoint.
+
+    Polls far more frequently than the other coordinators by default, since
+    this sensor exists to replace iServ's own push notifications — which are
+    unreliable when the same account is logged in on multiple devices.
+    """
+
+    def __init__(
+        self,
+        hass: HomeAssistant,
+        client: IServClient,
+    ) -> None:
+        """Initialize the notification coordinator.
+
+        Args:
+            hass: The Home Assistant instance.
+            client: An authenticated IServClient instance.
+        """
+        super().__init__(
+            hass,
+            _LOGGER,
+            name=f"{DOMAIN}_notifications",
+            update_interval=timedelta(minutes=DEFAULT_NOTIFICATION_UPDATE_INTERVAL),
+        )
+        self.client = client
+        self.consecutive_failures: int = 0
+
+    async def _async_update_data(self) -> list[Notification]:
+        """Fetch and parse the current notifications.
+
+        Returns:
+            List of Notification objects as returned by iServ.
+
+        Raises:
+            UpdateFailed: If the fetch fails after a re-authentication attempt.
+        """
+        try:
+            raw = await self.client.fetch_notifications()
+        except AuthenticationError:
+            try:
+                await self.client.authenticate()
+                raw = await self.client.fetch_notifications()
+            except (AuthenticationError, CannotConnect) as err:
+                self.consecutive_failures += 1
+                _LOGGER.error(
+                    "Failed to fetch notifications after re-authentication "
+                    "attempt (consecutive failures: %d): %s",
+                    self.consecutive_failures,
+                    err,
+                )
+                raise UpdateFailed(
+                    f"Authentication failed after retry: {err}"
+                ) from err
+        except CannotConnect as err:
+            self.consecutive_failures += 1
+            _LOGGER.warning(
+                "Failed to connect to iServ for notifications "
+                "(consecutive failures: %d): %s",
+                self.consecutive_failures,
+                err,
+            )
+            raise UpdateFailed(f"Cannot connect to iServ: {err}") from err
+
+        notifications = parse_notifications(raw, base_url=self.client.base_url)
+        self.consecutive_failures = 0
+        return notifications

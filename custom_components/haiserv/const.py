@@ -5,6 +5,10 @@ DOMAIN = "haiserv"
 # Update interval in minutes
 DEFAULT_UPDATE_INTERVAL = 60
 
+# Notification polling interval in minutes. Kept short because this sensor
+# exists to replace iServ's unreliable multi-device push notifications.
+DEFAULT_NOTIFICATION_UPDATE_INTERVAL = 5
+
 # Connection timeout in seconds
 CONNECTION_TIMEOUT = 10
 

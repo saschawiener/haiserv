@@ -280,3 +280,90 @@ class TestIServClient:
                 await client.fetch_timetable()
 
             assert client.is_authenticated is False
+
+
+# --- Notification Tests ---
+
+
+class TestIServClientNotifications:
+    """Tests for IServClient.fetch_notifications and the base_url property."""
+
+    BASE_URL = "https://school.iserv.de"
+    LOGIN_URL = f"{BASE_URL}/iserv/auth/login"
+    NOTIFICATIONS_URL = f"{BASE_URL}/iserv/user/api/notifications"
+
+    @pytest_asyncio.fixture
+    async def session(self):
+        """Create an aiohttp ClientSession for testing."""
+        session = aiohttp.ClientSession()
+        yield session
+        await session.close()
+
+    @pytest.fixture
+    def client(self, session):
+        """Create a client for testing notification fetches."""
+        return IServClient(
+            session=session,
+            base_url=self.BASE_URL,
+            username="testuser",
+            password="testpass",
+        )
+
+    def test_base_url_property(self, client):
+        """base_url exposes the normalized server URL."""
+        assert client.base_url == self.BASE_URL
+
+    @pytest.mark.asyncio
+    async def test_fetch_notifications_success(self, client):
+        """Successful notification fetch returns the raw JSON body."""
+        body = '{"status": "success", "data": {"notifications": []}}'
+        with aioresponses() as mocked:
+            mocked.post(self.LOGIN_URL, status=200)
+            mocked.get(self.NOTIFICATIONS_URL, status=200, body=body)
+
+            await client.authenticate()
+            result = await client.fetch_notifications()
+
+            assert result == body
+
+    @pytest.mark.asyncio
+    async def test_fetch_notifications_session_expiry_reauth(self, client):
+        """Session expiry triggers re-authentication and retry."""
+        body = '{"status": "success", "data": {"notifications": []}}'
+        with aioresponses() as mocked:
+            mocked.post(self.LOGIN_URL, status=200)
+            mocked.get(self.NOTIFICATIONS_URL, status=401)
+            mocked.post(self.LOGIN_URL, status=200)
+            mocked.get(self.NOTIFICATIONS_URL, status=200, body=body)
+
+            await client.authenticate()
+            result = await client.fetch_notifications()
+
+            assert result == body
+
+    @pytest.mark.asyncio
+    async def test_fetch_notifications_reauth_failure(self, client):
+        """If re-authentication fails after session expiry, raise AuthenticationError."""
+        with aioresponses() as mocked:
+            mocked.post(self.LOGIN_URL, status=200)
+            mocked.get(self.NOTIFICATIONS_URL, status=401)
+            mocked.post(self.LOGIN_URL, status=401)
+
+            await client.authenticate()
+
+            with pytest.raises(AuthenticationError):
+                await client.fetch_notifications()
+
+    @pytest.mark.asyncio
+    async def test_fetch_notifications_timeout(self, client):
+        """Notification fetch timeout raises CannotConnect."""
+        import asyncio
+
+        with aioresponses() as mocked:
+            mocked.post(self.LOGIN_URL, status=200)
+            mocked.get(self.NOTIFICATIONS_URL, exception=asyncio.TimeoutError())
+
+            await client.authenticate()
+
+            with pytest.raises(CannotConnect):
+                await client.fetch_notifications()

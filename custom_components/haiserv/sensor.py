@@ -13,9 +13,14 @@ from homeassistant.helpers.entity_platform import AddEntitiesCallback
 from homeassistant.helpers.update_coordinator import CoordinatorEntity
 
 from .const import DOMAIN, MAX_CONSECUTIVE_FAILURES
-from .coordinator import IServCoordinator, IServParentLetterCoordinator
+from .coordinator import (
+    IServCoordinator,
+    IServNotificationCoordinator,
+    IServParentLetterCoordinator,
+)
 from .parser import format_markdown_table, get_next_lesson
 from .parentletter_parser import ParentLetter
+from .notification import Notification
 
 
 async def async_setup_entry(
@@ -44,6 +49,12 @@ async def async_setup_entry(
     )
     if parentletter_coordinator is not None:
         entities.append(IServParentLetterSensor(parentletter_coordinator, entry))
+
+    notification_coordinator: IServNotificationCoordinator | None = hass.data[
+        DOMAIN
+    ].get(f"{entry.entry_id}_notifications")
+    if notification_coordinator is not None:
+        entities.append(IServNotificationSensor(notification_coordinator, entry))
 
     async_add_entities(entities)
 
@@ -213,6 +224,97 @@ class IServParentLetterSensor(
             "letters": [_letter_to_dict(letter) for letter in letters],
             "unread_count": sum(1 for letter in letters if letter.is_unread),
             "total_count": len(letters),
+            "last_updated": datetime.now().isoformat(),
+        }
+
+    @property
+    def available(self) -> bool:
+        """Return True unless too many consecutive failures with no cached data.
+
+        Returns False only when consecutive failures >= MAX_CONSECUTIVE_FAILURES
+        AND no prior data exists.
+        """
+        if (
+            self.coordinator.consecutive_failures >= MAX_CONSECUTIVE_FAILURES
+            and not self.coordinator.data
+        ):
+            return False
+        return True
+
+
+class IServNotificationSensor(
+    CoordinatorEntity[IServNotificationCoordinator], SensorEntity
+):
+    """Sensor entity exposing iServ notifications for a push-on-new automation."""
+
+    _attr_name = "iServ Notifications"
+
+    def __init__(
+        self, coordinator: IServNotificationCoordinator, entry: ConfigEntry
+    ) -> None:
+        """Initialize the notification sensor.
+
+        Args:
+            coordinator: The IServNotificationCoordinator managing data fetching.
+            entry: The config entry for this integration instance.
+        """
+        super().__init__(coordinator)
+        self._attr_unique_id = f"{entry.entry_id}_notifications"
+
+    @property
+    def native_value(self) -> str:
+        """Return the number of current notifications as a human-readable string.
+
+        Returns:
+            - "N notifications" when at least one notification is present
+            - "No notifications" when none are present
+        """
+        notifications: list[Notification] = self.coordinator.data or []
+        if not notifications:
+            return "No notifications"
+        return f"{len(notifications)} notifications"
+
+    @property
+    def extra_state_attributes(self) -> dict[str, Any]:
+        """Return the notification list and metadata as state attributes.
+
+        Returns:
+            Dict with:
+            - "notifications": list of notification dicts, in the order iServ
+              returned them
+            - "last_id": highest notification ID in the current list, or None.
+              Intended as a stable trigger anchor for automations — it changes
+              whenever a new notification arrives, independent of how many
+              notifications are currently pending.
+            - "count": integer count of current notifications
+            - "last_updated": ISO 8601 timestamp of last successful update
+        """
+        notifications: list[Notification] = self.coordinator.data or []
+
+        def _notification_to_dict(notification: Notification) -> dict[str, Any]:
+            return {
+                "id": notification.id,
+                "type": notification.type,
+                "title": notification.title,
+                "message": notification.message,
+                "url": notification.url,
+                "icon": notification.icon,
+                "date": (
+                    notification.date.isoformat() if notification.date else None
+                ),
+                "published": notification.published,
+            }
+
+        return {
+            "notifications": [
+                _notification_to_dict(notification) for notification in notifications
+            ],
+            "last_id": (
+                max(notification.id for notification in notifications)
+                if notifications
+                else None
+            ),
+            "count": len(notifications),
             "last_updated": datetime.now().isoformat(),
         }
 

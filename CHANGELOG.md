@@ -9,6 +9,12 @@
   successfully fetched timetable instead of failing. Only the latest successful
   version is kept per timetable (current and next week separately). The timetable
   sensor exposes the fallback via the `cached` state attribute.
+- **iServ Notifications** sensor: polls `/iserv/user/api/notifications` every
+  5 minutes and exposes the current notification feed (id, type, title,
+  message, deep-link URL, icon, date) plus a `last_id` attribute meant as a
+  stable trigger anchor for automations. Intended to replace IServ's own push
+  notifications, which are unreliable once an account is logged in on
+  multiple devices.
 
 ## [0.1.0] — 2026-09-18
 

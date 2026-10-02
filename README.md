@@ -1,6 +1,6 @@
 # HAiServ
 
-HAiServ is a custom [Home Assistant](https://www.home-assistant.io/) integration for retrieving timetable data and Elternbrief (parent letters) from an [IServ](https://iserv.de/) server. It authenticates with an existing IServ account, fetches the current and following week's timetables, monitors the Elternbrief inbox, and exposes the data as sensors.
+HAiServ is a custom [Home Assistant](https://www.home-assistant.io/) integration for retrieving timetable data, Elternbrief (parent letters), and notifications from an [IServ](https://iserv.de/) server. It authenticates with an existing IServ account, fetches the current and following week's timetables, monitors the Elternbrief inbox and the notification feed, and exposes the data as sensors.
 
 ## Quick Start
 [![Open your Home Assistant instance and open a repository inside the Home Assistant Community Store.](https://my.home-assistant.io/badges/hacs_repository.svg)](https://my.home-assistant.io/redirect/hacs_repository/?owner=jjoswig&repository=haiserv&category=integration)
@@ -26,6 +26,9 @@ If you find my work useful or it saves you some time, I'd genuinely appreciate a
 - Sensor state showing the next lesson for the current day
 - Structured lesson data and a Markdown timetable in sensor attributes
 - Elternbrief (parent letter) inbox monitoring with unread count
+- Notification polling (every 5 minutes by default) as a reliable alternative
+  to IServ's own push notifications, which are unreliable when the same
+  account is logged in on multiple devices
 - Retention of previously fetched data during temporary connection failures
 - Local timetable cache: if a fetch fails (e.g. the school disabled the timetable with HTTP 403), the last successfully fetched timetable is served
 
@@ -294,11 +297,13 @@ HAiServ validates the connection before creating the Home Assistant config entry
 
 ## Entities
 
-The integration creates three sensors:
+The integration creates four sensors:
 
 - **iServ Timetable** — the current calendar week's timetable and next lesson
 - **iServ Next Week Timetable** — the following Monday-to-Friday timetable
 - **iServ Parent Letters** — unread Elternbrief count and full letter list
+- **iServ Notifications** — current notification feed, for building a custom
+  push automation (see below)
 
 ### iServ Timetable
 
@@ -386,6 +391,71 @@ The `body_html` field is intentionally excluded from attributes to keep
 the attribute payload small. Use the CLI `--read` option to fetch the full
 letter text on demand.
 
+### iServ Notifications
+
+Polls `GET /iserv/user/api/notifications` every 5 minutes by default (see
+`DEFAULT_NOTIFICATION_UPDATE_INTERVAL` in `const.py` to change it). This
+sensor exists so Home Assistant can push notifications to your own devices
+instead of relying on IServ's built-in push, which is unreliable once the
+same account is logged in on more than one device.
+
+#### State
+
+The state is one of:
+
+- `N notifications` when at least one notification is currently pending
+- `No notifications` when the feed is empty
+
+#### Attributes
+
+| Attribute | Description |
+| --- | --- |
+| `notifications` | List of notification objects (see keys below), in the order iServ returned them |
+| `last_id` | Highest notification ID currently pending, or `null` when the feed is empty |
+| `count` | Number of currently pending notifications |
+| `last_updated` | ISO 8601 timestamp generated when the attributes are read |
+
+Each entry in the `notifications` list contains:
+
+| Key | Description |
+| --- | --- |
+| `id` | Numeric notification ID, stable across polls |
+| `type` | iServ notification type, e.g. `mail`, `exercise` |
+| `title` | Short title. Falls back to `message` for types where IServ leaves it empty (e.g. `mail`) |
+| `message` | Human-readable notification text |
+| `url` | Absolute deep link into IServ for this notification |
+| `icon` | IServ icon identifier, e.g. `envelope` |
+| `date` | ISO 8601 timestamp or `null` |
+| `published` | Boolean, as reported by IServ |
+
+`last_id` is the recommended trigger anchor for automations: it changes
+whenever a new notification arrives and is unaffected by notifications
+disappearing from the list (e.g. after being read elsewhere). A minimal
+automation that forwards new notifications as a mobile push:
+
+```yaml
+automation:
+  - alias: Forward iServ notifications
+    trigger:
+      - platform: state
+        entity_id: sensor.iserv_notifications
+        attribute: last_id
+    condition:
+      - condition: template
+        value_template: "{{ trigger.to_state.attributes.last_id is not none }}"
+    action:
+      - service: notify.mobile_app_your_phone
+        data:
+          title: "{{ trigger.to_state.attributes.notifications[0].title }}"
+          message: "{{ trigger.to_state.attributes.notifications[0].message }}"
+          data:
+            url: "{{ trigger.to_state.attributes.notifications[0].url }}"
+```
+
+The actual entity ID may differ if Home Assistant assigned another name, and
+`notify.mobile_app_your_phone` must be replaced with your device's actual
+notify service.
+
 ## Timetable dashboard
 
 [`dashboards/timetable.yaml`](dashboards/timetable.yaml) provides a ready-to-use
@@ -420,6 +490,7 @@ For a manual installation, replace `<config>/custom_components/haiserv` with the
 - **Cannot connect:** Verify the server URL and Home Assistant's network access.
 - **No lessons:** Confirm that the account can access timetable data and that the server returns the expected timetable format.
 - **Parent letters unavailable:** Confirm that the IServ account has access to the Elternbrief module. The timetable sensors are unaffected.
+- **Notifications unavailable:** Confirm that the IServ account has access to `/iserv/user/api/notifications`. The timetable and parent letter sensors are unaffected.
 
 Home Assistant logs for `custom_components.haiserv` can provide additional details. Passwords are not intentionally written to the integration's logs.
 
