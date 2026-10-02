@@ -1,12 +1,12 @@
 {
   "domain": "haiserv",
   "name": "HAiServ",
-  "version": "0.0.1",
+  "codeowners": ["@saschawiener"],
+  "config_flow": true,
+  "dependencies": [],
   "documentation": "https://github.com/saschawiener/haiserv",
   "issue_tracker": "https://github.com/saschawiener/haiserv/issues",
-  "codeowners": ["@saschawiener"],
-  "dependencies": [],
+  "iot_class": "cloud_polling",
   "requirements": ["aiohttp"],
-  "config_flow": true,
-  "iot_class": "cloud_polling"
+  "version": "0.0.1"
 }
