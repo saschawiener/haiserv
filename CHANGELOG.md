@@ -19,6 +19,9 @@
   redirects, and cookie names at DEBUG level. Enable
   `logger: custom_components.haiserv: debug` in Home Assistant to see which
   timetable endpoint generation your iServ instance accepts or rejects.
+- The iServ Notifications sensor's `new_notifications` / `new_count`
+  attributes expose exactly the notifications that appeared since the
+  previous poll.
 
 ### Fixed
 
@@ -27,6 +30,13 @@
   entry from setting up. The timetable sensor is now created like the other
   sensors and reports `unavailable` once its endpoint's consecutive-failure
   threshold is reached, instead of the integration failing setup entirely.
+- The iServ Notifications sensor's `last_id` is now persisted on disk per
+  account instead of recomputed as the current feed's max ID on every poll.
+  Previously, if the highest-numbered pending notification was read directly
+  in iServ between polls, `last_id` could regress to a lower value — masking
+  a genuinely new notification whose ID fell below that previous high, and
+  defeating `last_id`'s documented purpose as a monotonic trigger anchor.
+  `last_id` now only ever increases and survives Home Assistant restarts.
 
 ## [0.1.0] — 2026-09-18
 

@@ -122,6 +122,8 @@ def mock_coordinator(sample_notifications):
     coordinator = MagicMock()
     coordinator.data = sample_notifications
     coordinator.consecutive_failures = 0
+    coordinator.last_known_id = 101
+    coordinator.new_notifications = []
     return coordinator
 
 
@@ -184,17 +186,61 @@ class TestNotificationSensorAttributes:
         attrs = sensor.extra_state_attributes
         assert attrs["count"] == len(sample_notifications)
 
-    def test_last_id_is_max_id(self, sensor):
+    def test_last_id_is_coordinators_persisted_watermark(self, sensor):
+        """last_id reflects the coordinator's persisted watermark, not a
+        recomputed max of the currently pending notifications — so it stays
+        correct even if the highest-numbered one was since dismissed."""
         attrs = sensor.extra_state_attributes
+        assert attrs["last_id"] == 101
+
+    def test_last_id_survives_highest_notification_disappearing(self, mock_entry):
+        """Regression test: if the previously highest-ID notification is
+        dismissed in iServ, last_id must not regress to the new, lower max of
+        the currently pending list."""
+        coord = MagicMock()
+        coord.data = [
+            Notification(
+                id=50, type="mail", title="T", message="m", url="", icon="",
+                date=None,
+            )
+        ]
+        coord.consecutive_failures = 0
+        coord.last_known_id = 101  # higher ID 101 was dismissed, but remembered
+        coord.new_notifications = []
+        s = IServNotificationSensor(coord, mock_entry)
+        attrs = s.extra_state_attributes
         assert attrs["last_id"] == 101
 
     def test_last_id_none_when_empty(self, mock_entry):
         coord = MagicMock()
         coord.data = []
         coord.consecutive_failures = 0
+        coord.last_known_id = None
+        coord.new_notifications = []
         s = IServNotificationSensor(coord, mock_entry)
         attrs = s.extra_state_attributes
         assert attrs["last_id"] is None
+
+    def test_new_notifications_exposed(self, mock_entry, sample_notifications):
+        """New notifications since the previous poll are exposed separately
+        so automations can act on exactly what's new."""
+        coord = MagicMock()
+        coord.data = sample_notifications
+        coord.consecutive_failures = 0
+        coord.last_known_id = 101
+        coord.new_notifications = sample_notifications[1:]  # id=101 is new
+        s = IServNotificationSensor(coord, mock_entry)
+        attrs = s.extra_state_attributes
+        assert attrs["new_count"] == 1
+        assert len(attrs["new_notifications"]) == 1
+        assert attrs["new_notifications"][0]["id"] == 101
+
+    def test_new_notifications_empty_on_first_poll(self, sensor):
+        """The sensor fixture simulates a poll with no newly arrived
+        notifications (e.g. the first-ever poll establishing a baseline)."""
+        attrs = sensor.extra_state_attributes
+        assert attrs["new_notifications"] == []
+        assert attrs["new_count"] == 0
 
     def test_last_updated_is_iso_string(self, sensor):
         frozen = datetime(2024, 4, 1, 12, 0, 0)
@@ -226,6 +272,8 @@ class TestNotificationSensorAttributes:
         coord = MagicMock()
         coord.data = notifications
         coord.consecutive_failures = 0
+        coord.last_known_id = 1
+        coord.new_notifications = []
         s = IServNotificationSensor(coord, mock_entry)
         attrs = s.extra_state_attributes
         assert attrs["notifications"][0]["date"] is None
@@ -234,6 +282,8 @@ class TestNotificationSensorAttributes:
         coord = MagicMock()
         coord.data = []
         coord.consecutive_failures = 0
+        coord.last_known_id = None
+        coord.new_notifications = []
         s = IServNotificationSensor(coord, mock_entry)
         attrs = s.extra_state_attributes
         assert attrs["notifications"] == []

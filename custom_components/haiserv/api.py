@@ -614,6 +614,33 @@ class IServClient:
             await self.authenticate()
             return await self._do_fetch_page(url)
 
+    def load_last_notification_id(self) -> int | None:
+        """Return the highest notification ID seen as of the previous poll.
+
+        Persisted on disk (keyed by account) so a new notification is still
+        detected even if the previously highest-numbered one is dismissed in
+        iServ between polls, and across Home Assistant restarts.
+
+        Returns:
+            The last known highest notification ID, or None if nothing has
+            been recorded yet (e.g. first poll, or no cache configured).
+        """
+        if self._cache is None:
+            return None
+        data = self._cache.load(self._cache_key("notification", "last_id"))
+        if not isinstance(data, dict):
+            return None
+        last_id = data.get("last_id")
+        return last_id if isinstance(last_id, int) else None
+
+    def store_last_notification_id(self, last_id: int) -> None:
+        """Persist the highest notification ID seen so far for this account."""
+        if self._cache is None:
+            return
+        self._cache.store(
+            self._cache_key("notification", "last_id"), {"last_id": last_id}
+        )
+
     async def _do_fetch_page(self, url: str) -> str:
         """GET a page and return its text, raising on auth/connect failures.
 

@@ -411,7 +411,9 @@ The state is one of:
 | Attribute | Description |
 | --- | --- |
 | `notifications` | List of notification objects (see keys below), in the order iServ returned them |
-| `last_id` | Highest notification ID currently pending, or `null` when the feed is empty |
+| `last_id` | Highest notification ID ever seen for this account, persisted across polls and Home Assistant restarts, or `null` if none has ever been recorded |
+| `new_notifications` | Notifications that appeared since the previous successful poll (same object shape as `notifications`); empty on the very first poll |
+| `new_count` | Number of entries in `new_notifications` |
 | `count` | Number of currently pending notifications |
 | `last_updated` | ISO 8601 timestamp generated when the attributes are read |
 
@@ -428,10 +430,15 @@ Each entry in the `notifications` list contains:
 | `date` | ISO 8601 timestamp or `null` |
 | `published` | Boolean, as reported by IServ |
 
-`last_id` is the recommended trigger anchor for automations: it changes
-whenever a new notification arrives and is unaffected by notifications
-disappearing from the list (e.g. after being read elsewhere). A minimal
-automation that forwards new notifications as a mobile push:
+`last_id` is the recommended trigger anchor for automations: the integration
+persists it on disk per account, so it only ever increases and is unaffected
+by notifications disappearing from the list (e.g. after being read
+elsewhere) — a new notification is detected even if the pending *count*
+between two polls stays the same (one was read in iServ while another
+arrived). For the notification content itself, use `new_notifications`
+rather than assuming `notifications[0]` is the new one — it already contains
+exactly what appeared since the previous poll (possibly more than one). A
+minimal automation that forwards new notifications as a mobile push:
 
 ```yaml
 automation:
@@ -442,14 +449,17 @@ automation:
         attribute: last_id
     condition:
       - condition: template
-        value_template: "{{ trigger.to_state.attributes.last_id is not none }}"
+        value_template: "{{ trigger.to_state.attributes.new_notifications | count > 0 }}"
     action:
-      - service: notify.mobile_app_your_phone
-        data:
-          title: "{{ trigger.to_state.attributes.notifications[0].title }}"
-          message: "{{ trigger.to_state.attributes.notifications[0].message }}"
-          data:
-            url: "{{ trigger.to_state.attributes.notifications[0].url }}"
+      - repeat:
+          for_each: "{{ trigger.to_state.attributes.new_notifications }}"
+          sequence:
+            - service: notify.mobile_app_your_phone
+              data:
+                title: "{{ repeat.item.title }}"
+                message: "{{ repeat.item.message }}"
+                data:
+                  url: "{{ repeat.item.url }}"
 ```
 
 The actual entity ID may differ if Home Assistant assigned another name, and

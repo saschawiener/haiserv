@@ -11,6 +11,7 @@ from custom_components.haiserv.api import (
     IServClient,
     validate_url,
 )
+from custom_components.haiserv.cache import ResponseCache
 
 
 # --- URL Validation Tests ---
@@ -367,3 +368,91 @@ class TestIServClientNotifications:
 
             with pytest.raises(CannotConnect):
                 await client.fetch_notifications()
+
+
+# --- Notification Watermark Persistence Tests ---
+
+
+class TestIServClientNotificationWatermark:
+    """Tests for load/store_last_notification_id (on-disk watermark)."""
+
+    BASE_URL = "https://school.iserv.de"
+
+    @pytest.fixture
+    def client_with_cache(self, tmp_path):
+        """Create a client backed by a real on-disk ResponseCache."""
+        cache = ResponseCache(tmp_path)
+        return IServClient(
+            session=object(),
+            base_url=self.BASE_URL,
+            username="testuser",
+            password="testpass",
+            cache=cache,
+        )
+
+    def test_load_returns_none_when_nothing_stored(self, client_with_cache):
+        """No prior poll means no watermark yet."""
+        assert client_with_cache.load_last_notification_id() is None
+
+    def test_store_then_load_round_trips(self, client_with_cache):
+        """A stored watermark is returned by a later load, e.g. after an HA
+        restart (a fresh IServClient instance, same on-disk cache)."""
+        client_with_cache.store_last_notification_id(42)
+        assert client_with_cache.load_last_notification_id() == 42
+
+    def test_load_without_cache_returns_none(self):
+        """A client with no cache configured never has a persisted watermark."""
+        client = IServClient(
+            session=object(),
+            base_url=self.BASE_URL,
+            username="testuser",
+            password="testpass",
+        )
+        assert client.load_last_notification_id() is None
+        client.store_last_notification_id(5)  # must not raise
+        assert client.load_last_notification_id() is None
+
+    def test_watermark_persists_across_client_instances(self, tmp_path):
+        """A new IServClient instance (simulating an HA restart) backed by
+        the same cache directory sees the previously stored watermark."""
+        cache = ResponseCache(tmp_path)
+        first_client = IServClient(
+            session=object(),
+            base_url=self.BASE_URL,
+            username="testuser",
+            password="testpass",
+            cache=cache,
+        )
+        first_client.store_last_notification_id(7)
+
+        second_client = IServClient(
+            session=object(),
+            base_url=self.BASE_URL,
+            username="testuser",
+            password="testpass",
+            cache=ResponseCache(tmp_path),
+        )
+        assert second_client.load_last_notification_id() == 7
+
+    def test_watermark_is_scoped_per_account(self, tmp_path):
+        """Different usernames on the same cache directory don't collide."""
+        cache = ResponseCache(tmp_path)
+        client_a = IServClient(
+            session=object(),
+            base_url=self.BASE_URL,
+            username="alice",
+            password="pw",
+            cache=cache,
+        )
+        client_b = IServClient(
+            session=object(),
+            base_url=self.BASE_URL,
+            username="bob",
+            password="pw",
+            cache=cache,
+        )
+        client_a.store_last_notification_id(10)
+        client_b.store_last_notification_id(20)
+
+        assert client_a.load_last_notification_id() == 10
+        assert client_b.load_last_notification_id() == 20

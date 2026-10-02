@@ -212,9 +212,17 @@ class IServNotificationCoordinator(DataUpdateCoordinator[list[Notification]]):
         )
         self.client = client
         self.consecutive_failures: int = 0
+        self.last_known_id: int | None = None
+        self.new_notifications: list[Notification] = []
 
     async def _async_update_data(self) -> list[Notification]:
         """Fetch and parse the current notifications.
+
+        Compares the fetched IDs against the highest ID persisted from a
+        previous poll (``self.client``'s on-disk cache) so a new notification
+        is still detected even when the pending count hasn't grown — for
+        example because an older notification was read directly in iServ
+        between polls while a new one arrived.
 
         Returns:
             List of Notification objects as returned by iServ.
@@ -250,5 +258,25 @@ class IServNotificationCoordinator(DataUpdateCoordinator[list[Notification]]):
             raise UpdateFailed(f"Cannot connect to iServ: {err}") from err
 
         notifications = parse_notifications(raw, base_url=self.client.base_url)
+
+        previous_id = self.client.load_last_notification_id()
+        if previous_id is None:
+            # First-ever poll (or no cache): establish the baseline without
+            # treating every currently pending notification as "new".
+            self.new_notifications = []
+        else:
+            self.new_notifications = [
+                notification
+                for notification in notifications
+                if notification.id > previous_id
+            ]
+
+        known_ids = [previous_id, *(n.id for n in notifications)]
+        self.last_known_id = max(
+            (value for value in known_ids if value is not None), default=None
+        )
+        if self.last_known_id is not None:
+            self.client.store_last_notification_id(self.last_known_id)
+
         self.consecutive_failures = 0
         return notifications

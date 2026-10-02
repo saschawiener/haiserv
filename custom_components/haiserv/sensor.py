@@ -282,14 +282,21 @@ class IServNotificationSensor(
             Dict with:
             - "notifications": list of notification dicts, in the order iServ
               returned them
-            - "last_id": highest notification ID in the current list, or None.
-              Intended as a stable trigger anchor for automations — it changes
-              whenever a new notification arrives, independent of how many
-              notifications are currently pending.
+            - "last_id": highest notification ID ever seen for this account,
+              persisted across polls and Home Assistant restarts. Intended as
+              a stable trigger anchor for automations — it only increases, and
+              stays correct even if the highest-numbered notification is
+              dismissed in iServ before the next poll.
+            - "new_notifications": notifications that appeared since the
+              previous successful poll (empty on the very first poll).
+            - "new_count": number of newly appeared notifications.
             - "count": integer count of current notifications
             - "last_updated": ISO 8601 timestamp of last successful update
         """
         notifications: list[Notification] = self.coordinator.data or []
+        new_notifications: list[Notification] = getattr(
+            self.coordinator, "new_notifications", []
+        )
 
         def _notification_to_dict(notification: Notification) -> dict[str, Any]:
             return {
@@ -309,11 +316,12 @@ class IServNotificationSensor(
             "notifications": [
                 _notification_to_dict(notification) for notification in notifications
             ],
-            "last_id": (
-                max(notification.id for notification in notifications)
-                if notifications
-                else None
-            ),
+            "last_id": getattr(self.coordinator, "last_known_id", None),
+            "new_notifications": [
+                _notification_to_dict(notification)
+                for notification in new_notifications
+            ],
+            "new_count": len(new_notifications),
             "count": len(notifications),
             "last_updated": datetime.now().isoformat(),
         }

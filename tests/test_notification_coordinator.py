@@ -73,7 +73,29 @@ def mock_client():
     client.authenticate = AsyncMock()
     client.fetch_notifications = AsyncMock()
     client.base_url = "https://school.iserv.de"
+    # Default: no watermark persisted yet (first-ever poll).
+    client.load_last_notification_id = MagicMock(return_value=None)
+    client.store_last_notification_id = MagicMock()
     return client
+
+
+def _response_with_ids(*ids: int) -> str:
+    """Build a minimal notifications API response with the given IDs."""
+    import json
+
+    entries = [
+        {
+            "id": notification_id,
+            "type": "mail",
+            "title": "",
+            "message": f"Notification {notification_id}",
+            "url": "",
+            "icon": "",
+            "date": None,
+        }
+        for notification_id in ids
+    ]
+    return json.dumps({"status": "success", "data": {"notifications": entries}})
 
 
 @pytest.fixture
@@ -173,3 +195,83 @@ class TestConsecutiveFailures:
 
         assert "Failed to connect to iServ for notifications" in caplog.text
         assert "consecutive failures: 1" in caplog.text
+
+
+class TestNotificationWatermark:
+    """Tests for the persisted last-seen-notification-ID tracking.
+
+    This is what lets Home Assistant detect a new notification even when the
+    pending count didn't grow because an older notification was read
+    directly in iServ between polls while a new one arrived.
+    """
+
+    async def test_first_poll_establishes_baseline_without_new_notifications(
+        self, coordinator, mock_client
+    ):
+        """On the very first poll (nothing persisted yet), nothing already
+        pending should be treated as newly arrived."""
+        mock_client.fetch_notifications.return_value = _response_with_ids(5, 7)
+
+        result = await coordinator._async_update_data()
+
+        assert len(result) == 2
+        assert coordinator.new_notifications == []
+        assert coordinator.last_known_id == 7
+        mock_client.store_last_notification_id.assert_called_once_with(7)
+
+    async def test_higher_id_than_watermark_is_new(self, coordinator, mock_client):
+        """A notification with an ID above the persisted watermark is new."""
+        mock_client.load_last_notification_id.return_value = 7
+        mock_client.fetch_notifications.return_value = _response_with_ids(7, 9)
+
+        await coordinator._async_update_data()
+
+        assert [n.id for n in coordinator.new_notifications] == [9]
+        assert coordinator.last_known_id == 9
+        mock_client.store_last_notification_id.assert_called_once_with(9)
+
+    async def test_watermark_does_not_regress_when_highest_is_dismissed(
+        self, coordinator, mock_client
+    ):
+        """Regression test for the reported bug: if the previously
+        highest-numbered notification is dismissed in iServ between polls,
+        last_known_id must not fall back to a lower current max."""
+        mock_client.load_last_notification_id.return_value = 101
+        # id 101 was read/dismissed in iServ; only a lower, already-seen one remains.
+        mock_client.fetch_notifications.return_value = _response_with_ids(50)
+
+        await coordinator._async_update_data()
+
+        assert coordinator.last_known_id == 101
+        assert coordinator.new_notifications == []
+        mock_client.store_last_notification_id.assert_called_once_with(101)
+
+    async def test_new_notification_detected_even_without_count_increase(
+        self, coordinator, mock_client
+    ):
+        """Exact scenario reported: the pending count stays flat between
+        polls (one dismissed, one new arrives), but the new one must still
+        be detected."""
+        mock_client.load_last_notification_id.return_value = 101
+        # 101 was dismissed; 105 is new. Count (2 -> 2) is unchanged.
+        mock_client.fetch_notifications.return_value = _response_with_ids(50, 105)
+
+        await coordinator._async_update_data()
+
+        assert [n.id for n in coordinator.new_notifications] == [105]
+        assert coordinator.last_known_id == 105
+        mock_client.store_last_notification_id.assert_called_once_with(105)
+
+    async def test_no_notifications_pending_keeps_watermark(
+        self, coordinator, mock_client
+    ):
+        """An empty feed (everything read) must not erase the watermark."""
+        mock_client.load_last_notification_id.return_value = 101
+        mock_client.fetch_notifications.return_value = _response_with_ids()
+
+        result = await coordinator._async_update_data()
+
+        assert result == []
+        assert coordinator.last_known_id == 101
+        assert coordinator.new_notifications == []
+        mock_client.store_last_notification_id.assert_called_once_with(101)
